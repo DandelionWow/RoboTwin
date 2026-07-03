@@ -18,6 +18,7 @@ import gymnasium as gym
 import toppra as ta
 import transforms3d as t3d
 from collections import OrderedDict
+from envs.render_denoiser_config import configure_sapien_denoiser
 
 import sys
 import warnings
@@ -39,6 +40,7 @@ import gymnasium as gym
 import toppra as ta
 import transforms3d as t3d
 from collections import OrderedDict
+from envs.render_denoiser_config import configure_sapien_denoiser
 
 
 class Sapien_TEST(gym.Env):
@@ -70,7 +72,7 @@ class Sapien_TEST(gym.Env):
         sapien.render.set_camera_shader_dir("rt")
         sapien.render.set_ray_tracing_samples_per_pixel(32)
         sapien.render.set_ray_tracing_path_depth(8)
-        sapien.render.set_ray_tracing_denoiser("oidn")
+        configure_sapien_denoiser(sapien_module=sapien)
 
         # declare sapien scene
         scene_config = sapien.SceneConfig()

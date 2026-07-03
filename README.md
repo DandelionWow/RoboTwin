@@ -89,6 +89,51 @@ bash collect_data.sh ${task_name} ${task_config} ${gpu_id}
 # Example: bash collect_data.sh beat_block_hammer demo_randomized 0
 ```
 
+### Blackwell / OIDN Compatibility
+
+RoboTwin uses SAPIEN ray tracing denoising during rendering. On some Blackwell GPU environments, the SAPIEN bundled OIDN CUDA device can report errors such as `unsupported device type: CUDA`. The denoiser backend can be selected with `--denoiser` or the `ROBOTWIN_DENOISER` environment variable. Supported values are `oidn`, `optix`, and `none`; the default remains `oidn`.
+
+Default OIDN:
+
+```
+bash collect_data.sh beat_block_hammer demo_clean 1 --denoiser oidn
+```
+
+Use OptiX instead of OIDN:
+
+```
+bash collect_data.sh beat_block_hammer demo_clean 1 --denoiser optix
+ROBOTWIN_DENOISER=optix bash collect_data.sh beat_block_hammer demo_clean 1
+```
+
+Disable denoising:
+
+```
+bash collect_data.sh beat_block_hammer demo_clean 1 --denoiser none
+ROBOTWIN_DENOISER=none bash collect_data.sh beat_block_hammer demo_clean 1
+```
+
+Use a custom OIDN library directory:
+
+```
+python script/manage_sapien_oidn.py status
+python script/manage_sapien_oidn.py use-custom --source /path/to/new/oidn_library --dry-run
+python script/manage_sapien_oidn.py use-custom --source /path/to/new/oidn_library
+bash collect_data.sh beat_block_hammer demo_clean 1 --denoiser oidn
+```
+
+Or replace the SAPIEN OIDN library before collection starts:
+
+```
+bash collect_data.sh beat_block_hammer demo_clean 1 --denoiser oidn --oidn-library-dir /path/to/new/oidn_library
+```
+
+Restore the latest backup:
+
+```
+python script/manage_sapien_oidn.py restore --latest
+```
+
 ## 2. Modify Task Config
 ☝️ See [RoboTwin 2.0 Tasks Configurations Doc](https://robotwin-platform.github.io/doc/usage/configurations.html) for more details.
 

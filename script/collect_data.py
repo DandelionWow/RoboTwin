@@ -1,22 +1,73 @@
+import importlib
+import importlib.util
+import json
+import os
 import sys
+import time
+from argparse import ArgumentParser
+from pathlib import Path
+
+import yaml
 
 sys.path.append("./")
 
-import sapien.core as sapien
-from sapien.render import clear_cache
-from collections import OrderedDict
-import pdb
-from envs import *
-import yaml
-import importlib
-import json
-import traceback
-import os
-import time
-from argparse import ArgumentParser
-
 current_file_path = os.path.abspath(__file__)
 parent_directory = os.path.dirname(current_file_path)
+robotwin_root = Path(parent_directory).resolve().parent
+
+
+def _load_module_from_path(module_name, path):
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Could not load module from {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_render_denoiser_config():
+    return _load_module_from_path(
+        "_robotwin_render_denoiser_config",
+        robotwin_root / "envs" / "render_denoiser_config.py",
+    )
+
+
+def _load_oidn_manager():
+    return _load_module_from_path(
+        "_robotwin_manage_sapien_oidn",
+        robotwin_root / "script" / "manage_sapien_oidn.py",
+    )
+
+
+def prepare_denoiser_runtime(denoiser_backend=None, oidn_library_dir=None):
+    config = _load_render_denoiser_config()
+    backend = config.resolve_denoiser_backend(denoiser_backend)
+
+    if oidn_library_dir and backend == "oidn":
+        manager = _load_oidn_manager()
+        manager.use_custom_oidn_library(oidn_library_dir)
+    elif oidn_library_dir:
+        print(
+            f"[RoboTwin] Ignoring --oidn-library-dir because denoiser backend is {backend}."
+        )
+
+    os.environ[config.ENV_NAME] = backend
+    return backend
+
+
+def import_runtime_dependencies():
+    # OIDN library replacement must happen before this function imports SAPIEN.
+    global sapien, clear_cache, CONFIGS_PATH, UnStableError
+
+    import sapien.core as sapien_module
+    from sapien.render import clear_cache as clear_cache_func
+    from envs._GLOBAL_CONFIGS import CONFIGS_PATH as configs_path
+    from envs.utils.create_actor import UnStableError as unstable_error
+
+    sapien = sapien_module
+    clear_cache = clear_cache_func
+    CONFIGS_PATH = configs_path
+    UnStableError = unstable_error
 
 
 def class_decorator(task_name):
@@ -234,17 +285,26 @@ def run(TASK_ENV, args):
 
 
 if __name__ == "__main__":
+    parser = ArgumentParser()
+    parser.add_argument("task_name", type=str)
+    parser.add_argument("task_config", type=str)
+    parser.add_argument("--denoiser", type=str, default=None)
+    parser.add_argument("--oidn-library-dir", type=str, default=None)
+    parser = parser.parse_args()
+    task_name = parser.task_name
+    task_config = parser.task_config
+
+    try:
+        prepare_denoiser_runtime(parser.denoiser, parser.oidn_library_dir)
+    except Exception as exc:
+        raise SystemExit(str(exc))
+
+    import_runtime_dependencies()
+
     from test_render import Sapien_TEST
     Sapien_TEST()
 
     import torch.multiprocessing as mp
     mp.set_start_method("spawn", force=True)
-
-    parser = ArgumentParser()
-    parser.add_argument("task_name", type=str)
-    parser.add_argument("task_config", type=str)
-    parser = parser.parse_args()
-    task_name = parser.task_name
-    task_config = parser.task_config
 
     main(task_name=task_name, task_config=task_config)

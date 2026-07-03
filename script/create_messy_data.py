@@ -13,6 +13,7 @@ import trimesh.bounds
 
 sys.path.append(".")
 from envs.utils import *
+from envs.render_denoiser_config import configure_sapien_denoiser
 import sapien.core as sapien
 from sapien.utils.viewer import Viewer
 from tqdm import tqdm
@@ -54,7 +55,7 @@ class Helper:
         sapien.render.set_camera_shader_dir("rt")
         sapien.render.set_ray_tracing_samples_per_pixel(32)
         sapien.render.set_ray_tracing_path_depth(8)
-        sapien.render.set_ray_tracing_denoiser("oidn")
+        configure_sapien_denoiser(sapien_module=sapien)
 
         # declare sapien scene
         scene_config = sapien.SceneConfig()
