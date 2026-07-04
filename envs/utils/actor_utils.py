@@ -35,14 +35,14 @@ class Actor:
         """Get the point of the entity actor."""
         type = self.POINTS[type]
 
-        actor_matrix = self.actor.get_pose().to_transformation_matrix()
-        try:
-            local_matrix = np.array(self.config[type][idx])
+        actor_matrix = self.actor.get_pose().to_transformation_matrix() # 物体坐标系相对于世界坐标系的位姿
+        try: 
+            local_matrix = np.array(self.config[type][idx]) # point在物体坐标系下的位姿
         except:
             return None
         local_matrix[:3, 3] *= np.array(self.config["scale"])
 
-        world_matrix = actor_matrix @ local_matrix
+        world_matrix = actor_matrix @ local_matrix 
 
         if ret == "matrix":
             return world_matrix

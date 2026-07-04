@@ -1045,17 +1045,19 @@ class Base_Task(gym.Env):
         if not self.plan_success:
             return [-1, -1, -1, -1, -1, -1, -1]
 
-        contact_matrix = actor.get_contact_point(contact_point_id, "matrix")
+        contact_matrix = actor.get_contact_point(contact_point_id, "matrix") # 物体抓取点坐标系相对于世界坐标系的变换矩阵
         if contact_matrix is None:
             return None
         global_contact_pose_matrix = contact_matrix @ np.array([[0, 0, 1, 0], [-1, 0, 0, 0], [0, -1, 0, 0],
-                                                                [0, 0, 0, 1]])
+                                                                [0, 0, 0, 1]]) # 法兰盘坐标系相对于物体坐标系的变换矩阵
         global_contact_pose_matrix_q = global_contact_pose_matrix[:3, :3]
         global_grasp_pose_p = (global_contact_pose_matrix[:3, 3] +
-                               global_contact_pose_matrix_q @ np.array([-0.12 - pre_dis, 0, 0]).T)
+                               global_contact_pose_matrix_q @ np.array([-0.12 - pre_dis, 0, 0]).T) # 法兰盘距tcp末端0.12
         global_grasp_pose_q = t3d.quaternions.mat2quat(global_contact_pose_matrix_q)
         res_pose = list(global_grasp_pose_p) + list(global_grasp_pose_q)
-        res_pose = self.choose_best_pose(res_pose, actor.get_contact_point(contact_point_id, "list"), arm_tag)
+        res_pose = self.choose_best_pose(res_pose, actor.get_contact_point(contact_point_id, "list"), arm_tag) # tcp末端坐标系相对于世界坐标系的变换矩阵
+        # 扰动点坐标系相对于tcp末端坐标系的变换矩阵（可视化所有的预抓取矩阵）
+
         return res_pose
 
     def _default_choose_grasp_pose(self, actor: Actor, arm_tag: ArmTag, pre_dis: float) -> list:
