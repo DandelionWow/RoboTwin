@@ -7,6 +7,8 @@ from argparse import ArgumentParser
 from copy import deepcopy
 from pathlib import Path
 
+os.environ["CUDA_VISIBLE_DEVICES"] = "3"  # Disable GPU usage for this script
+
 ROBOTWIN_ROOT = Path(__file__).resolve().parents[1]
 os.chdir(ROBOTWIN_ROOT)
 sys.path.append(str(ROBOTWIN_ROOT))
@@ -184,7 +186,7 @@ def generate_episode_instructions(args):
     scene_info = load_scene_info(args["task_name"], setting, config_args["save_path"])
     episodes = extract_episodes_from_scene_info(scene_info)
     descriptions = generate_episode_descriptions(args["task_name"], episodes, args["language_num"])
-    save_episode_descriptions(args["task_name"], setting, descriptions)
+    save_episode_descriptions(args["task_name"], setting, descriptions, config_args["save_path"])
 
 
 def load_perturbation_records(cache_root, task_config, task_name, seed, limit=None):
@@ -214,6 +216,8 @@ def load_perturbation_records(cache_root, task_config, task_name, seed, limit=No
                 "save_id": save_dir.name,
                 "item_index": item_index,
                 "point_id": item.get("point_id"),
+                "pre_grasp_dis": item.get("pre_grasp_dis", data.get("pre_grasp_dis")),
+                "grasp_dis": item.get("grasp_dis", data.get("grasp_dis")),
                 "pre_grasp_pose_world": pre_pose,
                 "grasp_pose_world": grasp_pose,
                 "tcp_pose_world": item.get("perturbed_tcp_pose_world"),
@@ -233,6 +237,13 @@ def add_perturbation_info(info, seed, record):
     info["perturbation_item_index"] = record["item_index"]
     info["perturbation_point_id"] = record["point_id"]
     info["perturbation_source_dir"] = record["source_dir"]
+    if record.get("pre_grasp_dis") is not None:
+        info["pre_grasp_dis"] = record["pre_grasp_dis"]
+    if record.get("grasp_dis") is not None:
+        info["grasp_dis"] = record["grasp_dis"]
+    info["pre_grasp_pose_world"] = record.get("pre_grasp_pose_world")
+    info["grasp_pose_world"] = record.get("grasp_pose_world")
+    info["tcp_pose_world"] = record.get("tcp_pose_world")
     return info
 
 
@@ -256,8 +267,11 @@ def collect_pre_motion_for_record(TASK_ENV, args, episode_idx, seed, record, ren
         except Exception as e:
             raise TaskSuccessCheckError(f"Task success check crashed during planning: {e}") from e
         if not task_success:
-            print(f"\033[93mTask success error: episode {episode_idx}, perturbation {record['save_id']} item {record['item_index']}\033[0m")
-            return "task_error"
+            print(
+                f"\033[93mTask success error during planning: episode {episode_idx}, "
+                f"perturbation {record['save_id']} item {record['item_index']}; "
+                "keep trajectory for failed-sample replay\033[0m"
+            )
         TASK_ENV.save_dir = traj_args["save_path"]
         TASK_ENV.save_traj_data(traj_episode_idx)
         return "success"
@@ -342,7 +356,13 @@ def collect_perturbed_data(TASK_ENV, args, seed, records, start_episode=None, ov
     fail_episode_idx = next_episode_index(fail_args["save_path"])
     plan_render_freq = args.get("render_freq", 0)
     clear_cache_freq = args.get("clear_cache_freq", 1) or 1
-    collected_keys = set() if overwrite else read_collected_perturbation_keys(success_args["save_path"])
+    if overwrite:
+        collected_keys = set()
+    else:
+        collected_keys = (
+            read_collected_perturbation_keys(success_args["save_path"])
+            | read_collected_perturbation_keys(fail_args["save_path"])
+        )
     total_num = 0
     planning_fail_num = 0
     task_fail_num = 0

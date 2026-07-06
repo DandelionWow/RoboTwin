@@ -3,11 +3,14 @@ from ._base_task import Base_Task
 from .utils import *
 import sapien
 import math
+import numpy as np
+import transforms3d as t3d
 
 
-class click_alarmclock(Base_Task):
+class ep2_1_object_pose_click_alarmclock(Base_Task):
 
     def setup_demo(self, **kwags):
+        self.perturbed_grasp_record = kwags.get("perturbed_grasp_record")
         super()._init_task_env_(**kwags)
 
     def load_actors(self):
@@ -148,21 +151,56 @@ class click_alarmclock(Base_Task):
                 Action(arm_tag, "close", target_gripper_pos=gripper_pos),
             ]
 
+    def get_grasp_pose(
+        self,
+        actor,
+        arm_tag,
+        contact_point_id=0,
+        pre_dis=0.0,
+    ):
+        record = getattr(self, "perturbed_grasp_record", None)
+        if not record:
+            return super().get_grasp_pose(
+                actor,
+                arm_tag=arm_tag,
+                contact_point_id=contact_point_id,
+                pre_dis=pre_dis,
+            )
+
+        if not self.plan_success:
+            return [-1, -1, -1, -1, -1, -1, -1]
+
+        if not self.need_plan:
+            return [0, 0, 0, 0, 0, 0, 0]
+
+        pose_key = "pre_grasp_pose_world" if float(pre_dis) > 0 else "grasp_pose_world"
+        grasp_pose = record.get(pose_key)
+        if not grasp_pose:
+            print(f"[Warning] missing perturbed {pose_key}, fallback to default get_grasp_pose")
+            return super().get_grasp_pose(
+                actor,
+                arm_tag=arm_tag,
+                contact_point_id=contact_point_id,
+                pre_dis=pre_dis,
+            )
+        return grasp_pose
+
 
     def get_waypoint_selection_scene_info(self):
-        bottle_pose = self.bottle.get_pose()
-        arm_tag = ArmTag("right" if self.qpose_tag == 1 else "left")
+        actor = self.alarm
+        actor_pose = actor.get_pose()
+        arm_tag = ArmTag("right" if actor_pose.p[0] > 0 else "left")
         contact_points = []
-        for point_id, point_matrix in self.bottle.iter_contact_points("matrix"):
+        for point_id, point_matrix in actor.iter_contact_points("matrix"):
             if point_matrix is None:
                 continue
-            grasp_pose = self.get_grasp_pose(self.bottle, arm_tag, contact_point_id=point_id, pre_dis=0.0)
+            grasp_pose = self.get_grasp_pose(actor, arm_tag, contact_point_id=point_id, pre_dis=0.0)
             grasp_matrix = self._waypoint_pose_to_matrix(grasp_pose)
             tcp_matrix = self._waypoint_translate_local_x(grasp_matrix, 0.12)
             contact_points.append({
                 "id": int(point_id),
                 "matrix_world": point_matrix,
-                "pose_world": self.bottle.get_contact_point(point_id, "list"),
+                "pose_world": actor.get_contact_point(point_id, "list"),
                 "grasp_pose_world": grasp_pose,
                 "grasp_matrix_world": grasp_matrix,
                 "tcp_matrix_world": tcp_matrix,
@@ -170,11 +208,12 @@ class click_alarmclock(Base_Task):
 
         return {
             "objects": [{
-                "name": "bottle",
-                "model_id": int(self.model_id),
+                "name": "alarm",
+                "model_name": "046_alarm-clock",
+                "model_id": int(self.alarmclock_id),
                 "pose_world": {
-                    "p": bottle_pose.p.tolist(),
-                    "q": bottle_pose.q.tolist(),
+                    "p": actor_pose.p.tolist(),
+                    "q": actor_pose.q.tolist(),
                 },
                 "arm_tag": str(arm_tag),
                 "contact_points": contact_points,
@@ -200,12 +239,13 @@ class click_alarmclock(Base_Task):
         return self._waypoint_choose_best_pose(res_pose, center_pose, arm_tag)
 
     def compute_waypoint_perturbed_grasps(self, point_ids, perturbation, pre_grasp_distance=0.1):
-        arm_tag = ArmTag("right" if self.qpose_tag == 1 else "left")
+        actor = self.alarm
+        arm_tag = ArmTag("right" if actor.get_pose().p[0] > 0 else "left")
         results = []
         failures = []
         delta_matrix = self._waypoint_delta_matrix(perturbation)
         for point_id in point_ids:
-            contact_matrix = self.bottle.get_contact_point(int(point_id), "matrix")
+            contact_matrix = actor.get_contact_point(int(point_id), "matrix")
             if contact_matrix is None:
                 failures.append(f"point {point_id}: contact point does not exist")
                 continue
@@ -247,7 +287,7 @@ class click_alarmclock(Base_Task):
 
     def _waypoint_reachable_contact_point_ids(self, delta_matrix, arm_tag, pre_grasp_distance):
         reachable = []
-        for point_id, contact_matrix in self.bottle.iter_contact_points("matrix"):
+        for point_id, contact_matrix in self.alarm.iter_contact_points("matrix"):
             if contact_matrix is None:
                 continue
             perturbed_contact = contact_matrix @ delta_matrix

@@ -2,11 +2,14 @@ from ._base_task import Base_Task
 from .utils import *
 import sapien
 from ._GLOBAL_CONFIGS import *
+import numpy as np
+import transforms3d as t3d
 
 
-class beat_block_hammer(Base_Task):
+class ep2_1_object_pose_beat_block_hammer(Base_Task):
 
     def setup_demo(self, **kwags):
+        self.perturbed_grasp_record = kwags.get("perturbed_grasp_record")
         super()._init_task_env_(**kwags)
 
     def load_actors(self):
@@ -145,19 +148,21 @@ class beat_block_hammer(Base_Task):
 
 
     def get_waypoint_selection_scene_info(self):
-        bottle_pose = self.bottle.get_pose()
-        arm_tag = ArmTag("right" if self.qpose_tag == 1 else "left")
+        actor = self.hammer
+        actor_pose = actor.get_pose()
+        block_pose = self.block.get_functional_point(0, "pose").p
+        arm_tag = ArmTag("left" if block_pose[0] < 0 else "right")
         contact_points = []
-        for point_id, point_matrix in self.bottle.iter_contact_points("matrix"):
+        for point_id, point_matrix in actor.iter_contact_points("matrix"):
             if point_matrix is None:
                 continue
-            grasp_pose = self.get_grasp_pose(self.bottle, arm_tag, contact_point_id=point_id, pre_dis=0.0)
+            grasp_pose = self.get_grasp_pose(actor, arm_tag, contact_point_id=point_id, pre_dis=0.0)
             grasp_matrix = self._waypoint_pose_to_matrix(grasp_pose)
             tcp_matrix = self._waypoint_translate_local_x(grasp_matrix, 0.12)
             contact_points.append({
                 "id": int(point_id),
                 "matrix_world": point_matrix,
-                "pose_world": self.bottle.get_contact_point(point_id, "list"),
+                "pose_world": actor.get_contact_point(point_id, "list"),
                 "grasp_pose_world": grasp_pose,
                 "grasp_matrix_world": grasp_matrix,
                 "tcp_matrix_world": tcp_matrix,
@@ -165,11 +170,12 @@ class beat_block_hammer(Base_Task):
 
         return {
             "objects": [{
-                "name": "bottle",
-                "model_id": int(self.model_id),
+                "name": "hammer",
+                "model_name": "020_hammer",
+                "model_id": 0,
                 "pose_world": {
-                    "p": bottle_pose.p.tolist(),
-                    "q": bottle_pose.q.tolist(),
+                    "p": actor_pose.p.tolist(),
+                    "q": actor_pose.q.tolist(),
                 },
                 "arm_tag": str(arm_tag),
                 "contact_points": contact_points,
@@ -194,13 +200,17 @@ class beat_block_hammer(Base_Task):
     def choose_best_pose(self, res_pose, center_pose, arm_tag=None):
         return self._waypoint_choose_best_pose(res_pose, center_pose, arm_tag)
 
-    def compute_waypoint_perturbed_grasps(self, point_ids, perturbation, pre_grasp_distance=0.1):
-        arm_tag = ArmTag("right" if self.qpose_tag == 1 else "left")
+    def compute_waypoint_perturbed_grasps(self, point_ids, perturbation, pre_grasp_dis=0.1, grasp_dis=0.0):
+        if float(pre_grasp_dis) < float(grasp_dis):
+            raise ValueError("pre_grasp_dis must be greater than or equal to grasp_dis")
+        actor = self.hammer
+        block_pose = self.block.get_functional_point(0, "pose").p
+        arm_tag = ArmTag("left" if block_pose[0] < 0 else "right")
         results = []
         failures = []
         delta_matrix = self._waypoint_delta_matrix(perturbation)
         for point_id in point_ids:
-            contact_matrix = self.bottle.get_contact_point(int(point_id), "matrix")
+            contact_matrix = actor.get_contact_point(int(point_id), "matrix")
             if contact_matrix is None:
                 failures.append(f"point {point_id}: contact point does not exist")
                 continue
@@ -210,7 +220,8 @@ class beat_block_hammer(Base_Task):
                 perturbed_contact,
                 perturbed_contact_pose,
                 arm_tag,
-                pre_grasp_distance,
+                pre_grasp_dis,
+                grasp_dis,
             )
             if pre_grasp_pose is None or grasp_pose is None:
                 failures.append(f"point {point_id}: no reachable pre-grasp pose")
@@ -233,16 +244,17 @@ class beat_block_hammer(Base_Task):
             reachable_points = self._waypoint_reachable_contact_point_ids(
                 delta_matrix,
                 arm_tag,
-                pre_grasp_distance,
+                pre_grasp_dis,
+                grasp_dis,
             )
             if reachable_points:
                 raise ValueError(f"{'; '.join(failures)}; reachable contact points: {reachable_points}")
             raise ValueError(f"{'; '.join(failures)}; no contact point is reachable under current perturbation")
         return results
 
-    def _waypoint_reachable_contact_point_ids(self, delta_matrix, arm_tag, pre_grasp_distance):
+    def _waypoint_reachable_contact_point_ids(self, delta_matrix, arm_tag, pre_grasp_dis, grasp_dis):
         reachable = []
-        for point_id, contact_matrix in self.bottle.iter_contact_points("matrix"):
+        for point_id, contact_matrix in self.hammer.iter_contact_points("matrix"):
             if contact_matrix is None:
                 continue
             perturbed_contact = contact_matrix @ delta_matrix
@@ -251,17 +263,18 @@ class beat_block_hammer(Base_Task):
                 perturbed_contact,
                 perturbed_contact_pose,
                 arm_tag,
-                pre_grasp_distance,
+                pre_grasp_dis,
+                grasp_dis,
             )
             if pre_grasp_pose is not None and grasp_pose is not None:
                 reachable.append(int(point_id))
         return reachable
 
-    def _waypoint_grasp_poses_from_contact_matrix(self, contact_matrix, contact_pose, arm_tag, pre_grasp_distance):
+    def _waypoint_grasp_poses_from_contact_matrix(self, contact_matrix, contact_pose, arm_tag, pre_grasp_dis, grasp_dis):
         contact_to_tcp = np.array([[0, 0, 1, 0], [-1, 0, 0, 0], [0, -1, 0, 0], [0, 0, 0, 1]], dtype=float)
         tcp_matrix = contact_matrix @ contact_to_tcp
         pre_grasp_position = tcp_matrix[:3, 3] + tcp_matrix[:3, :3] @ np.array(
-            [-0.12 - float(pre_grasp_distance), 0, 0],
+            [-0.12 - float(pre_grasp_dis), 0, 0],
             dtype=float,
         )
         grasp_quat = t3d.quaternions.mat2quat(tcp_matrix[:3, :3])
@@ -272,7 +285,7 @@ class beat_block_hammer(Base_Task):
         )
         if pre_grasp_pose is None:
             return None, None
-        grasp_pose = self._waypoint_translate_pose_local_x(pre_grasp_pose, pre_grasp_distance)
+        grasp_pose = self._waypoint_translate_pose_local_x(pre_grasp_pose, float(pre_grasp_dis) - float(grasp_dis))
         return pre_grasp_pose, grasp_pose
 
     def _waypoint_translate_pose_local_x(self, pose, distance):

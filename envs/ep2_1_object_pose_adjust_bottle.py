@@ -18,18 +18,16 @@ class ep2_1_object_pose_adjust_bottle(Base_Task):
         self.qpose_tag = np.random.randint(0, 2)
         qposes = [[0.707, 0.0, 0.0, -0.707], [0.707, 0.0, 0.0, 0.707]]
         xlims = [[-0.12, -0.08], [0.08, 0.12]]
-        ylims= [[-0.13, -0.08]]
-
+        
         # xlims = [[-0.2], [0.2]]
         # ylims = [[-0.15], [0.15]]
-
 
         self.model_id = np.random.choice([13, 16])
 
         self.bottle = rand_create_actor(
             self,
             xlim=xlims[self.qpose_tag],
-            ylim=ylims[0],
+            ylim=[-0.13, -0.08],
             zlim=[0.752],
             rotate_rand=True,
             qpos=qposes[self.qpose_tag],
