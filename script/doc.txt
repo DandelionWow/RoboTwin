@@ -1,0 +1,81 @@
+python script/collect_perturbed_data_seed_auto.py \
+--mode seed \
+--task-name adjust_bottle \
+--task-config ep2_1_object_pose_auto \
+--seed 0 \
+--perturbation-num-success 3 \
+--perturbation-num-fail 2 \
+--max-attempts 200 \
+--x-range -0.05 0.05 \
+--y-range -0.05 0.05 \
+--z-range 0 0.05 \
+--roll-range -15 15 \
+--pitch-range -15 15 \
+--yaw-range -15 15
+
+--perturbation-num
+
+python script/collect_perturbed_data_seed_auto.py \
+--mode seed \
+--task-name beat_block_hammer \
+--task-config ep2_1_object_pose_auto \
+--seed 0 \
+--perturbation-num 5 \
+--max-attempts 200 \
+--x-range -0.01 0.01 \
+--y-range -0.01 0.01 \
+--z-range 0 0.02 \
+--roll-range -5 5 \
+--pitch-range -5 5 \
+--yaw-range -10 10
+
+python script/collect_perturbed_data_seed_auto.py \
+--mode dataset \
+--dataset-root /data/wangbowen/PHD_Research/02_Action_Generalization/Action_Hallucination_Verification/robotwin_consistency/database/datasets/robotwin_480_640 \
+--tasks adjust_bottle \
+--task-config ep2_1_object_pose_auto \
+--sample-start 0 \
+--sample-end 4 \
+--perturbation-num-success 3 \
+--perturbation-num-fail 2 \
+--max-attempts 100 \
+--x-range -0.05 0.05 \
+--y-range -0.05 0.05 \
+--z-range 0 0.05 \
+--roll-range -15 15 \
+--pitch-range -15 15 \
+--yaw-range -15 15
+
+python script/collect_perturbed_data_seed_auto.py \
+--mode dataset \
+--dataset-root /data/wangbowen/PHD_Research/02_Action_Generalization/Action_Hallucination_Verification/robotwin_consistency/database/datasets/robotwin_480_640 \
+--tasks adjust_bottle beat_block_hammer click_alarmclock click_bell dump_bin_bigbin move_can_pot move_pillbottle_pad move_playingcard_away move_stapler_pad open_laptop open_microwave place_a2b_left \
+--task-config ep2_1_object_pose_auto \
+--sample-start 0 \
+--sample-end 4 \
+--perturbation-num-success 3 \
+--perturbation-num-fail 2 \
+--max-attempts 100 \
+--x-range -0.05 0.05 \
+--y-range -0.05 0.05 \
+--z-range 0 0.05 \
+--roll-range -15 15 \
+--pitch-range -15 15 \
+--yaw-range -15 15
+
+python script/collect_perturbed_data_seed_auto.py \
+--mode dataset \
+--dataset-root /data/wangbowen/PHD_Research/02_Action_Generalization/Action_Hallucination_Verification/robotwin_consistency/database/datasets/robotwin_480_640 \
+--tasks place_a2b_right place_container_plate place_empty_cup place_fan place_mouse_pad place_object_scale place_object_stand place_shoe press_stapler rotate_qrcode shake_bottle shake_bottle_horizontally stamp_seal turn_switch \
+--task-config ep2_1_object_pose_auto \
+--sample-start 0 \
+--sample-end 4 \
+--perturbation-num-success 3 \
+--perturbation-num-fail 2 \
+--max-attempts 100 \
+--x-range -0.05 0.05 \
+--y-range -0.05 0.05 \
+--z-range 0 0.05 \
+--roll-range -15 15 \
+--pitch-range -15 15 \
+--yaw-range -15 15

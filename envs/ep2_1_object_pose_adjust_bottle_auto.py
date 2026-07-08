@@ -108,7 +108,7 @@ class ep2_1_object_pose_adjust_bottle(Base_Task):
                 grasp_pose = [0, 0, 0, 0, 0, 0, 0]
 
             if not pre_grasp_pose or not grasp_pose:
-                 raise ValueError("missing perturbed grasp pose: pre_grasp_pose_world and/or grasp_pose_world")
+                raise ValueError("missing perturbed grasp pose: pre_grasp_pose_world and/or grasp_pose_world")
 
             if pre_grasp_dis == grasp_dis:
                 return arm_tag, [

@@ -185,15 +185,7 @@ class ep2_1_object_pose_place_a2b_left(Base_Task):
                 grasp_pose = [0, 0, 0, 0, 0, 0, 0]
 
             if not pre_grasp_pose or not grasp_pose:
-                print("[Warning] missing perturbed grasp pose, fallback to default grasp_actor")
-                return super().grasp_actor(
-                    actor,
-                    arm_tag=arm_tag,
-                    pre_grasp_dis=pre_grasp_dis,
-                    grasp_dis=grasp_dis,
-                    gripper_pos=gripper_pos,
-                    contact_point_id=contact_point_id,
-                )
+                 raise ValueError("missing perturbed grasp pose: pre_grasp_pose_world and/or grasp_pose_world")
 
             if pre_grasp_dis == grasp_dis:
                 return arm_tag, [

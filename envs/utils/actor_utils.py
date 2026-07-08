@@ -42,7 +42,7 @@ class Actor:
             return None
         local_matrix[:3, 3] *= np.array(self.config["scale"])
 
-        world_matrix = actor_matrix @ local_matrix 
+        world_matrix = actor_matrix @ local_matrix
 
         if ret == "matrix":
             return world_matrix

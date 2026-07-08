@@ -170,23 +170,9 @@ def write_seed(save_path, episode_idx, seed):
 
 
 def generate_episode_instructions(args):
-    from description.utils.generate_episode_instructions import (
-        extract_episodes_from_scene_info,
-        generate_episode_descriptions,
-        load_scene_info,
-        save_episode_descriptions,
-    )
+    from script.utils.patch import generate_episode_instructions_from_save_path
 
-    config_name = args.get("source_task_config", args["task_config"])
-    config_path = ROBOTWIN_ROOT / "task_config" / f"{config_name}.yml"
-    with open(config_path, "r", encoding="utf-8") as f:
-        config_args = yaml.load(f.read(), Loader=yaml.FullLoader)
-
-    setting = args["task_config"]
-    scene_info = load_scene_info(args["task_name"], setting, config_args["save_path"])
-    episodes = extract_episodes_from_scene_info(scene_info)
-    descriptions = generate_episode_descriptions(args["task_name"], episodes, args["language_num"])
-    save_episode_descriptions(args["task_name"], setting, descriptions, config_args["save_path"])
+    generate_episode_instructions_from_save_path(args)
 
 
 def load_perturbation_records(cache_root, task_config, task_name, seed, limit=None):
@@ -402,10 +388,6 @@ def collect_perturbed_data(TASK_ENV, args, seed, records, start_episode=None, ov
                 planning_fail_num += 1
                 print(f"\033[93mSkip episode {episode_idx}: planning failed\033[0m")
                 continue
-            if pre_motion_status == "task_error":
-                task_fail_num += 1
-                print(f"\033[93mSkip episode {episode_idx}: task success check failed during planning\033[0m")
-                continue
 
             replay_status = collect_hdf5_for_record(
                 TASK_ENV,
@@ -425,6 +407,7 @@ def collect_perturbed_data(TASK_ENV, args, seed, records, start_episode=None, ov
                 continue
             if replay_status == "task_error":
                 task_fail_num += 1
+                collected_keys.add(record_key)
                 fail_episode_idx += 1
                 continue
 
@@ -451,6 +434,8 @@ def collect_perturbed_data(TASK_ENV, args, seed, records, start_episode=None, ov
     )
     if success_num:
         generate_episode_instructions(success_args)
+    if task_fail_num:
+        generate_episode_instructions(fail_args)
 
 
 def build_args(task_name, task_config, seed, episode_num=None):
