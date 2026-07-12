@@ -1,0 +1,7 @@
+{
+  "full_description": "validate TCP-local roll, pitch, and yaw rotation directions",
+  "schema": "metadata-only validation task; language descriptions are disabled in rpy_direction_clean.yml",
+  "preference": "metadata only",
+  "seen": [],
+  "unseen": []
+}

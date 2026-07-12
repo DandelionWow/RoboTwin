@@ -1,0 +1,7 @@
+{
+  "full_description": "validate TCP-local RPY rotations at implicit mirrored grid points without visual grid markers",
+  "schema": "metadata-only implicit-grid TCP-local RPY task; language descriptions are disabled in rpy_grid_rpy_rotation_clean.yml",
+  "preference": "metadata only",
+  "seen": [],
+  "unseen": []
+}

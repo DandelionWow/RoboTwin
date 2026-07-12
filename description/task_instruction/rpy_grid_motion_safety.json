@@ -1,0 +1,7 @@
+{
+  "full_description": "validate that visual-only floating grid markers do not affect robot motion",
+  "schema": "metadata-only grid motion safety task; language descriptions are disabled in rpy_grid_motion_safety_clean.yml",
+  "preference": "metadata only",
+  "seen": [],
+  "unseen": []
+}
