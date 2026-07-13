@@ -1,18 +1,16 @@
 import json
 import os
-import re
 import shutil
-import subprocess
 import sys
 import tempfile
-import threading
 import time
 import traceback
 from argparse import ArgumentParser
-from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
 from contextlib import contextmanager, redirect_stdout
 from copy import deepcopy
 from pathlib import Path
+
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 ROBOTWIN_ROOT = Path(__file__).resolve().parents[1]
 os.chdir(ROBOTWIN_ROOT)
@@ -38,25 +36,6 @@ _ORIGINAL_ARTICULATION_GET_POINT = None
 _ORIGINAL_TAKE_PICTURE = None
 _CONTACT_PERTURBATION_SAMPLER = None
 _REPLAY_PROGRESS = None
-ANSI_CONTROL_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
-
-
-def plain_log_enabled(output_file=None):
-    if os.environ.get("ROBOTWIN_PLAIN_LOG") == "1":
-        return True
-    if output_file is not None and hasattr(output_file, "isatty"):
-        try:
-            return not output_file.isatty()
-        except Exception:
-            return False
-    return False
-
-
-def strip_log_control_sequences(text):
-    text = ANSI_CONTROL_RE.sub("", str(text))
-    text = text.replace("\r", "\n")
-    lines = [line.strip() for line in text.split("\n")]
-    return "\n".join(line for line in lines if line)
 
 
 class ContactPointPerturbationSampler:
@@ -287,7 +266,6 @@ def uninstall_contact_point_perturbation_patch():
 class OverallCollectionProgress:
     def __init__(self, total_tasks):
         self.output_file = sys.stdout
-        self.plain_log = plain_log_enabled(self.output_file)
         self.completed_tasks = 0
         self.current = {
             "task": "-",
@@ -307,8 +285,7 @@ class OverallCollectionProgress:
             total=1,
             desc="Replay",
             position=0,
-            leave=not self.plain_log,
-            disable=self.plain_log,
+            leave=True,
             dynamic_ncols=False,
             ncols=self._progress_width(),
             file=self.output_file,
@@ -318,8 +295,7 @@ class OverallCollectionProgress:
             total=0,
             desc="Cur",
             position=1,
-            leave=not self.plain_log,
-            disable=self.plain_log,
+            leave=True,
             dynamic_ncols=False,
             ncols=self._progress_width(),
             file=self.output_file,
@@ -329,8 +305,7 @@ class OverallCollectionProgress:
             total=total_tasks,
             desc="Tasks",
             position=2,
-            leave=not self.plain_log,
-            disable=self.plain_log,
+            leave=True,
             dynamic_ncols=False,
             ncols=self._progress_width(),
             file=self.output_file,
@@ -426,13 +401,6 @@ class OverallCollectionProgress:
 
     def write(self, message):
         self._ensure_clean_line()
-        message = strip_log_control_sequences(message) if self.plain_log else message
-        if not message:
-            return
-        if self.plain_log:
-            self.output_file.write(message + "\n")
-            self.output_file.flush()
-            return
         tqdm.write(message, file=self.output_file)
 
     def update_replay_status(self, message):
@@ -501,7 +469,7 @@ class OverallCollectionProgress:
     @contextmanager
     def redirect_output(self):
         global _REPLAY_PROGRESS
-        redirector = _TqdmOutputRedirector(self, plain_log=self.plain_log)
+        redirector = _TqdmOutputRedirector(self)
         previous_progress = _REPLAY_PROGRESS
         _REPLAY_PROGRESS = self
         try:
@@ -532,24 +500,13 @@ class OverallCollectionProgress:
 
 
 class _TqdmOutputRedirector:
-    def __init__(self, progress, plain_log=False):
+    def __init__(self, progress):
         self.progress = progress
         self.buffer = ""
-        self.plain_log = plain_log
 
     def write(self, text):
         if not text:
             return 0
-        if self.plain_log:
-            text = strip_log_control_sequences(text)
-            if not text:
-                return 0
-            self.buffer += text
-            while "\n" in self.buffer:
-                line, self.buffer = self.buffer.split("\n", 1)
-                if line:
-                    self.progress.write(line)
-            return len(text)
         if "\r" in text:
             carriage_line = (self.buffer + text).replace("\r", "").strip()
             self.buffer = ""
@@ -679,15 +636,6 @@ def save_scene_info(args, episode_idx, info):
         json.dump(info_db, file, ensure_ascii=False, indent=4)
 
 
-def read_scene_info_entry(save_path, episode_idx):
-    info_file_path = os.path.join(save_path, "scene_info.json")
-    if not os.path.exists(info_file_path):
-        return None
-    with open(info_file_path, "r", encoding="utf-8") as file:
-        info_db = json.load(file)
-    return info_db.get(f"episode_{episode_idx}")
-
-
 def read_collected_source_keys(save_path, min_episode=None):
     info_file_path = os.path.join(save_path, "scene_info.json")
     if not os.path.exists(info_file_path):
@@ -801,39 +749,6 @@ def remove_traj_data_safely(save_path, episode_idx):
             os.remove(traj_path)
     except Exception as e:
         print(f"\033[93mWarning: failed to remove temp traj data {traj_path}: {e}\033[0m")
-
-
-def move_episode_file(source_path, final_path, overwrite):
-    if not os.path.exists(source_path):
-        return False
-    os.makedirs(os.path.dirname(final_path), exist_ok=True)
-    if os.path.exists(final_path):
-        if not overwrite:
-            raise SystemExit(f"Episode output already exists: {final_path}. Use --overwrite to regenerate it.")
-        os.remove(final_path)
-    shutil.move(source_path, final_path)
-    return True
-
-
-def commit_attempt_output(source_save_path, final_args, final_episode_idx, scene_seed, overwrite=False):
-    ensure_episode_writable(final_args["save_path"], final_episode_idx, overwrite)
-    moved_any = False
-    moved_any |= move_episode_file(
-        os.path.join(source_save_path, "data", "episode0.hdf5"),
-        os.path.join(final_args["save_path"], "data", f"episode{final_episode_idx}.hdf5"),
-        overwrite,
-    )
-    moved_any |= move_episode_file(
-        os.path.join(source_save_path, "video", "episode0.mp4"),
-        os.path.join(final_args["save_path"], "video", f"episode{final_episode_idx}.mp4"),
-        overwrite,
-    )
-    info = read_scene_info_entry(source_save_path, 0)
-    if info is not None:
-        save_scene_info(final_args, final_episode_idx, info)
-    if moved_any or info is not None:
-        write_seed(final_args["save_path"], final_episode_idx, scene_seed)
-    return moved_any
 
 
 def generate_episode_instructions(args):
@@ -1315,227 +1230,6 @@ def collect_seed_mode(
         shutil.rmtree(plan_save_path, ignore_errors=True)
 
 
-def collect_seed_mode_parallel(
-    args,
-    cli_args,
-    scene_seed,
-    perturbation_num_success,
-    perturbation_num_fail,
-    max_attempts,
-    base_perturb_seed,
-    seed_threads,
-    start_episode=None,
-    overwrite=False,
-    progress=None,
-):
-    scene_seed = int(scene_seed)
-    seed_threads = int(seed_threads)
-    if seed_threads <= 1:
-        raise SystemExit("--seed-threads must be > 1 for parallel seed collection")
-
-    success_args, fail_args = make_seed_output_args(args, scene_seed)
-    os.makedirs(success_args["save_path"], exist_ok=True)
-    os.makedirs(fail_args["save_path"], exist_ok=True)
-
-    success_start_episode = int(start_episode or 0)
-    if start_episode is None:
-        success_episode_idx = 0 if overwrite else next_episode_index(success_args["save_path"])
-    else:
-        success_episode_idx = int(start_episode) if overwrite else next_episode_index_from(
-            success_args["save_path"],
-            start_episode,
-        )
-    fail_episode_idx = 0 if overwrite else next_episode_index(fail_args["save_path"])
-
-    if max_attempts is None:
-        max_attempts = max(1, int(perturbation_num_success) + int(perturbation_num_fail)) * 20
-
-    existing_success_num = 0 if overwrite else min(
-        max(success_episode_idx - success_start_episode, 0),
-        int(perturbation_num_success),
-    )
-    existing_fail_num = 0 if overwrite else min(fail_episode_idx, int(perturbation_num_fail))
-    success_num = 0
-    task_fail_num = 0
-    planning_fail_num = 0
-    launcher_fail_num = 0
-    submitted_attempt_num = 0
-    completed_attempt_num = 0
-    target_collect_num = int(perturbation_num_success) + int(perturbation_num_fail)
-
-    def success_done():
-        return existing_success_num + success_num >= int(perturbation_num_success)
-
-    def fail_done():
-        return existing_fail_num + task_fail_num >= int(perturbation_num_fail)
-
-    def collection_done():
-        return success_done() and fail_done()
-
-    def update_progress():
-        if progress is None:
-            return
-        progress.update_current(
-            seed=scene_seed,
-            collected=existing_success_num + existing_fail_num + success_num + task_fail_num,
-            done_success=existing_success_num + success_num,
-            done_task_failed=existing_fail_num + task_fail_num,
-            target=target_collect_num,
-            target_success=int(perturbation_num_success),
-            target_task_failed=int(perturbation_num_fail),
-            completed_seeds=(1 if collection_done() else 0),
-        )
-
-    if progress is not None:
-        progress.start_task(
-            args["task_name"],
-            seed=scene_seed,
-            target=target_collect_num,
-            target_success=int(perturbation_num_success),
-            target_task_failed=int(perturbation_num_fail),
-            seed_index=1,
-            total_seeds=1,
-            completed_seeds=0,
-        )
-        update_progress()
-
-    attempt_root = Path(tempfile.mkdtemp(prefix=f"robotwin_contact_perturb_seed_{scene_seed}_attempts_"))
-    attempt_log_dir = attempt_root / "logs"
-    print("\033[93m[Start Parallel Contact-Perturbed Seed Collection]\033[0m")
-    print(
-        f"Fixed seed: {scene_seed}, seed_threads: {seed_threads}, "
-        f"Success target: {perturbation_num_success}, Fail target: {perturbation_num_fail}, "
-        f"Max attempts: {max_attempts}"
-    )
-
-    def can_submit():
-        return submitted_attempt_num < int(max_attempts) and not collection_done()
-
-    def submit_attempt(executor):
-        nonlocal submitted_attempt_num
-        attempt_idx = submitted_attempt_num
-        submitted_attempt_num += 1
-        save_success = not success_done()
-        save_fail = not fail_done()
-        attempt_perturb_seed = int(base_perturb_seed) + int(attempt_idx)
-        print(
-            f"\033[34mSubmit seed {scene_seed} attempt {attempt_idx}, "
-            f"perturb_seed {attempt_perturb_seed}, save_success={save_success}, save_fail={save_fail}\033[0m"
-        )
-        return executor.submit(
-            run_attempt_subprocess,
-            cli_args,
-            attempt_root / f"attempt_{attempt_idx}",
-            attempt_idx,
-            attempt_perturb_seed,
-            save_success,
-            save_fail,
-            attempt_log_dir,
-        )
-
-    try:
-        running = {}
-        with ThreadPoolExecutor(max_workers=seed_threads) as executor:
-            while can_submit() and len(running) < seed_threads:
-                future = submit_attempt(executor)
-                running[future] = submitted_attempt_num - 1
-
-            while running:
-                done_futures, _ = wait(running, return_when=FIRST_COMPLETED)
-                for future in done_futures:
-                    attempt_idx = running.pop(future)
-                    completed_attempt_num += 1
-                    try:
-                        result = future.result()
-                    except Exception as e:
-                        launcher_fail_num += 1
-                        print(f"\033[93mAttempt {attempt_idx} launcher failed: {e}\033[0m")
-                        result = {"status": "launcher_error", "attempt_root": None, "log_path": "<not created>"}
-
-                    status = result.get("status")
-                    log_path = result.get("log_path", "<unknown>")
-                    try:
-                        if status == "success":
-                            if success_done():
-                                print(
-                                    f"\033[93mDiscard extra successful attempt {attempt_idx}: "
-                                    f"success target already reached. log={log_path}\033[0m"
-                                )
-                            else:
-                                commit_attempt_output(
-                                    result["source_save_path"],
-                                    success_args,
-                                    success_episode_idx,
-                                    scene_seed,
-                                    overwrite=overwrite,
-                                )
-                                print(
-                                    f"commit seed {scene_seed} attempt {attempt_idx} to success episode "
-                                    f"{success_episode_idx}"
-                                )
-                                success_episode_idx += 1
-                                success_num += 1
-                        elif status == "task_error":
-                            if fail_done():
-                                print(
-                                    f"\033[93mDiscard extra failed attempt {attempt_idx}: "
-                                    f"fail target already reached. log={log_path}\033[0m"
-                                )
-                            else:
-                                commit_attempt_output(
-                                    result["source_save_path"],
-                                    fail_args,
-                                    fail_episode_idx,
-                                    scene_seed,
-                                    overwrite=overwrite,
-                                )
-                                print(f"commit seed {scene_seed} attempt {attempt_idx} to fail episode {fail_episode_idx}")
-                                fail_episode_idx += 1
-                                task_fail_num += 1
-                        elif status == "planning_error":
-                            planning_fail_num += 1
-                            print(f"\033[93mSkip attempt {attempt_idx}: planning failed. log={log_path}\033[0m")
-                        elif status in {"success_extra", "task_error_extra"}:
-                            print(f"\033[93mSkip extra attempt {attempt_idx}: status={status}. log={log_path}\033[0m")
-                        else:
-                            launcher_fail_num += 1
-                            print(
-                                f"\033[93mAttempt {attempt_idx} failed before producing a collectable result: "
-                                f"status={status}, log={log_path}\033[0m"
-                            )
-                    finally:
-                        if result.get("attempt_root"):
-                            shutil.rmtree(result["attempt_root"], ignore_errors=True)
-
-                    update_progress()
-
-                    while can_submit() and len(running) < seed_threads:
-                        future = submit_attempt(executor)
-                        running[future] = submitted_attempt_num - 1
-
-        missing_success_num = max(int(perturbation_num_success) - existing_success_num - success_num, 0)
-        missing_fail_num = max(int(perturbation_num_fail) - existing_fail_num - task_fail_num, 0)
-        print(
-            f"\033[93mParallel collection summary: submitted={submitted_attempt_num}, "
-            f"completed={completed_attempt_num}, planning_failed={planning_fail_num}, "
-            f"launcher_failed={launcher_fail_num}, task_failed_saved={task_fail_num}, "
-            f"success_saved={success_num}.\033[0m"
-        )
-        if missing_success_num or missing_fail_num:
-            print(
-                f"\033[93mSeed {scene_seed} reached max attempts or exhausted pending work; "
-                f"missing success={missing_success_num}, missing fail={missing_fail_num}\033[0m"
-            )
-        if success_num:
-            generate_episode_instructions(success_args)
-        if task_fail_num:
-            generate_episode_instructions(fail_args)
-        if progress is not None:
-            progress.finish_task()
-    finally:
-        shutil.rmtree(attempt_root, ignore_errors=True)
-
-
 def find_dataset_task_dir(dataset_root, task_name, source_task_config=None):
     task_root = Path(dataset_root) / task_name
     if source_task_config:
@@ -1956,507 +1650,6 @@ def resolve_perturbation_targets(cli_args):
     return int(success), int(fail)
 
 
-def parse_cuda_devices(value):
-    devices = []
-    for item in str(value).split(","):
-        item = item.strip()
-        if item:
-            devices.append(item)
-    if not devices:
-        raise SystemExit("--cuda-devices must contain at least one CUDA id")
-    return devices
-
-
-def sanitize_log_name(value):
-    return re.sub(r"[^A-Za-z0-9_.-]+", "_", str(value)).strip("_") or "job"
-
-
-def build_log_run_dir(cli_args, now=None):
-    timestamp = now or time.strftime("%Y%m%d_%H%M%S")
-    base_dir = Path(cli_args.log_dir)
-    if not base_dir.is_absolute():
-        base_dir = ROBOTWIN_ROOT / base_dir
-    return base_dir / sanitize_log_name(cli_args.task_config) / timestamp
-
-
-def add_optional_cli_arg(command, name, value):
-    if value is not None:
-        command.extend([name, str(value)])
-
-
-def add_range_cli_arg(command, name, values):
-    if values is not None:
-        command.extend([name, str(values[0]), str(values[1])])
-
-
-def build_distributed_jobs(cli_args):
-    if cli_args.mode == "seed":
-        if cli_args.task_name is None or cli_args.task_config is None:
-            raise SystemExit("--mode seed requires --task-name and --task-config")
-        seeds = cli_args.seeds or ([] if cli_args.seed is None else [cli_args.seed])
-        if not seeds:
-            raise SystemExit("--mode seed requires --seed or --seeds for distributed collection")
-        return [
-            {
-                "task_name": cli_args.task_name,
-                "seed": int(seed),
-                "source_episode": None,
-                "source_task_config": cli_args.source_task_config,
-                "output_root": None,
-            }
-            for seed in seeds
-        ]
-
-    if cli_args.task_config is None:
-        raise SystemExit("--mode dataset requires --task-config")
-    task_names = cli_args.tasks or discover_dataset_tasks(cli_args.dataset_root, cli_args.source_task_config)
-    jobs = []
-    for task_name in task_names:
-        source_dir = find_dataset_task_dir(cli_args.dataset_root, task_name, cli_args.source_task_config)
-        resolved_source_task_config = source_dir.name
-        seeds = read_seed_list(source_dir)
-        if cli_args.sample_start < 0 or cli_args.sample_end < cli_args.sample_start:
-            raise SystemExit("--sample-start must be >= 0 and --sample-end must be >= sample-start")
-        if cli_args.sample_end >= len(seeds):
-            raise SystemExit(f"{source_dir}/seed.txt has {len(seeds)} seeds, cannot use sample-end {cli_args.sample_end}")
-        for source_episode in range(cli_args.sample_start, cli_args.sample_end + 1):
-            jobs.append(
-                {
-                    "task_name": task_name,
-                    "seed": int(seeds[source_episode]),
-                    "source_episode": source_episode,
-                    "source_task_config": resolved_source_task_config,
-                    "output_root": str(ROBOTWIN_ROOT / "data" / cli_args.task_config),
-                }
-            )
-    return jobs
-
-
-def build_worker_command(cli_args, job):
-    command = [
-        sys.executable,
-        str(Path(__file__).resolve()),
-        "--distributed-worker",
-        "--mode",
-        "seed",
-        "--task-name",
-        str(job["task_name"]),
-        "--task-config",
-        str(cli_args.task_config),
-        "--seed",
-        str(job["seed"]),
-    ]
-    add_optional_cli_arg(command, "--source-task-config", job.get("source_task_config"))
-    add_optional_cli_arg(command, "--worker-output-root", job.get("output_root"))
-    if cli_args.perturb_seed is not None:
-        add_optional_cli_arg(command, "--perturb-seed", cli_args.perturb_seed)
-    elif cli_args.mode == "dataset":
-        add_optional_cli_arg(command, "--perturb-seed", 0)
-    add_optional_cli_arg(command, "--perturbation-num", cli_args.perturbation_num)
-    add_optional_cli_arg(command, "--perturbation-num-success", cli_args.perturbation_num_success)
-    add_optional_cli_arg(command, "--perturbation-num-fail", cli_args.perturbation_num_fail)
-    add_optional_cli_arg(command, "--max-attempts", cli_args.max_attempts)
-    add_optional_cli_arg(command, "--start-episode", cli_args.start_episode)
-    add_range_cli_arg(command, "--x-range", cli_args.x_range)
-    add_range_cli_arg(command, "--y-range", cli_args.y_range)
-    add_range_cli_arg(command, "--z-range", cli_args.z_range)
-    add_range_cli_arg(command, "--roll-range", cli_args.roll_range)
-    add_range_cli_arg(command, "--pitch-range", cli_args.pitch_range)
-    add_range_cli_arg(command, "--yaw-range", cli_args.yaw_range)
-    add_optional_cli_arg(command, "--seed-threads", cli_args.seed_threads)
-    if cli_args.overwrite:
-        command.append("--overwrite")
-    if cli_args.dynamic_call_perturbation:
-        command.append("--dynamic-call-perturbation")
-    return command
-
-
-def build_attempt_worker_command(
-    cli_args,
-    attempt_output_root,
-    attempt_result_path,
-    attempt_index,
-    attempt_perturb_seed,
-    save_success,
-    save_fail,
-):
-    command = [
-        sys.executable,
-        str(Path(__file__).resolve()),
-        "--distributed-attempt-worker",
-        "--mode",
-        "seed",
-        "--task-name",
-        str(cli_args.task_name),
-        "--task-config",
-        str(cli_args.task_config),
-        "--seed",
-        str(cli_args.seed),
-        "--perturb-seed",
-        str(attempt_perturb_seed),
-        "--attempt-index",
-        str(attempt_index),
-        "--attempt-output-root",
-        str(attempt_output_root),
-        "--attempt-result-path",
-        str(attempt_result_path),
-    ]
-    add_optional_cli_arg(command, "--source-task-config", cli_args.source_task_config)
-    add_range_cli_arg(command, "--x-range", cli_args.x_range)
-    add_range_cli_arg(command, "--y-range", cli_args.y_range)
-    add_range_cli_arg(command, "--z-range", cli_args.z_range)
-    add_range_cli_arg(command, "--roll-range", cli_args.roll_range)
-    add_range_cli_arg(command, "--pitch-range", cli_args.pitch_range)
-    add_range_cli_arg(command, "--yaw-range", cli_args.yaw_range)
-    if save_success:
-        command.append("--attempt-save-success")
-    if save_fail:
-        command.append("--attempt-save-fail")
-    if cli_args.dynamic_call_perturbation:
-        command.append("--dynamic-call-perturbation")
-    return command
-
-
-def log_path_for_job(log_dir, job):
-    parts = [job["task_name"]]
-    if job.get("source_episode") is not None:
-        parts.append(f"src{job['source_episode']}")
-    parts.append(f"seed{job['seed']}")
-    return Path(log_dir) / f"{sanitize_log_name('_'.join(map(str, parts)))}.log"
-
-
-def run_worker_subprocess(cli_args, job, cuda_device, log_dir):
-    log_path = log_path_for_job(log_dir, job)
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    command = build_worker_command(cli_args, job)
-    env = os.environ.copy()
-    env["CUDA_VISIBLE_DEVICES"] = str(cuda_device)
-    env["ROBOTWIN_PLAIN_LOG"] = "1"
-    start_time = time.strftime("%Y-%m-%d %H:%M:%S")
-    with open(log_path, "w", encoding="utf-8", buffering=1) as log_file:
-        log_file.write(f"[{start_time}] cuda={cuda_device} task={job['task_name']} seed={job['seed']}\n")
-        if job.get("source_episode") is not None:
-            log_file.write(f"source_episode={job['source_episode']}\n")
-        log_file.write("command=" + " ".join(command) + "\n\n")
-        result = subprocess.run(
-            command,
-            cwd=str(ROBOTWIN_ROOT),
-            env=env,
-            stdout=log_file,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
-    return {
-        "job": job,
-        "cuda": cuda_device,
-        "log_path": str(log_path),
-        "returncode": result.returncode,
-    }
-
-
-def read_attempt_result(result_path):
-    if not os.path.exists(result_path):
-        return None
-    with open(result_path, "r", encoding="utf-8") as file:
-        return json.load(file)
-
-
-def write_attempt_result(result_path, result):
-    os.makedirs(os.path.dirname(result_path), exist_ok=True)
-    with open(result_path, "w", encoding="utf-8") as file:
-        json.dump(result, file, ensure_ascii=False, indent=2)
-
-
-def run_attempt_subprocess(
-    cli_args,
-    attempt_root,
-    attempt_index,
-    attempt_perturb_seed,
-    save_success,
-    save_fail,
-    log_dir,
-):
-    attempt_root = Path(attempt_root)
-    attempt_root.mkdir(parents=True, exist_ok=True)
-    result_path = attempt_root / "result.json"
-    log_dir = Path(log_dir)
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_path = log_dir / f"attempt_{attempt_index}.log"
-    command = build_attempt_worker_command(
-        cli_args,
-        attempt_root / "output",
-        result_path,
-        attempt_index,
-        attempt_perturb_seed,
-        save_success,
-        save_fail,
-    )
-    env = os.environ.copy()
-    env["ROBOTWIN_PLAIN_LOG"] = "1"
-    start_time = time.strftime("%Y-%m-%d %H:%M:%S")
-    with open(log_path, "w", encoding="utf-8", buffering=1) as log_file:
-        log_file.write(
-            f"[{start_time}] seed={cli_args.seed} attempt={attempt_index} "
-            f"perturb_seed={attempt_perturb_seed}\n"
-        )
-        log_file.write("command=" + " ".join(command) + "\n\n")
-        result = subprocess.run(
-            command,
-            cwd=str(ROBOTWIN_ROOT),
-            env=env,
-            stdout=log_file,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
-    attempt_result = read_attempt_result(result_path) or {
-        "status": "launcher_error",
-        "attempt_index": attempt_index,
-        "scene_seed": cli_args.seed,
-        "error": f"attempt worker exited {result.returncode} without result file",
-    }
-    attempt_result["returncode"] = result.returncode
-    attempt_result["log_path"] = str(log_path)
-    attempt_result["attempt_root"] = str(attempt_root)
-    return attempt_result
-
-
-def run_distributed_parent(cli_args):
-    cuda_devices = parse_cuda_devices(cli_args.cuda_devices)
-    if cli_args.threads <= 0:
-        raise SystemExit("--threads must be positive")
-    worker_count = int(cli_args.threads)
-    jobs = build_distributed_jobs(cli_args)
-    if not jobs:
-        raise SystemExit("No distributed jobs to run")
-
-    log_dir = build_log_run_dir(cli_args)
-    log_dir.mkdir(parents=True, exist_ok=True)
-    print(f"Logs: {log_dir}")
-    active_counts = {cuda_device: 0 for cuda_device in cuda_devices}
-    cuda_lock = threading.Lock()
-
-    failures = []
-
-    def acquire_cuda():
-        with cuda_lock:
-            cuda_device = min(cuda_devices, key=lambda device: (active_counts[device], cuda_devices.index(device)))
-            active_counts[cuda_device] += 1
-            return cuda_device
-
-    def release_cuda(cuda_device):
-        with cuda_lock:
-            active_counts[cuda_device] -= 1
-
-    def run_with_slot(job):
-        cuda_device = acquire_cuda()
-        try:
-            return run_worker_subprocess(cli_args, job, cuda_device, log_dir)
-        finally:
-            release_cuda(cuda_device)
-
-    with ThreadPoolExecutor(max_workers=worker_count) as executor:
-        future_to_job = {executor.submit(run_with_slot, job): job for job in jobs}
-        with tqdm(
-            total=len(jobs),
-            desc="Total",
-            dynamic_ncols=False,
-            ncols=min(shutil.get_terminal_size((120, 20)).columns, 120),
-            bar_format="{desc}: {percentage:3.0f}%|{bar:10}| {n_fmt}/{total_fmt}",
-        ) as progress:
-            for future in as_completed(future_to_job):
-                job = future_to_job[future]
-                try:
-                    result = future.result()
-                    if result["returncode"] != 0:
-                        failures.append(result)
-                except Exception as e:
-                    failures.append(
-                        {
-                            "job": job,
-                            "cuda": "?",
-                            "log_path": "<not created>",
-                            "returncode": f"launcher_error: {e}",
-                        }
-                    )
-                progress.update(1)
-
-    if failures:
-        print(f"{len(failures)} distributed jobs failed. Logs:")
-        for failure in failures[:20]:
-            job = failure["job"]
-            print(
-                f"  task={job['task_name']} seed={job['seed']} cuda={failure['cuda']} "
-                f"returncode={failure['returncode']} log={failure['log_path']}"
-            )
-        raise SystemExit(1)
-
-
-def run_distributed_attempt_worker(cli_args):
-    if cli_args.task_name is None or cli_args.task_config is None or cli_args.seed is None:
-        raise SystemExit("attempt worker requires --task-name, --task-config, and --seed")
-    if cli_args.attempt_output_root is None or cli_args.attempt_result_path is None:
-        raise SystemExit("attempt worker requires --attempt-output-root and --attempt-result-path")
-    if cli_args.attempt_index is None:
-        raise SystemExit("attempt worker requires --attempt-index")
-
-    result = {
-        "status": "launcher_error",
-        "attempt_index": cli_args.attempt_index,
-        "scene_seed": cli_args.seed,
-        "source_save_path": None,
-        "error": None,
-    }
-    plan_save_path = None
-    progress = None
-    try:
-        perturb_seed = cli_args.perturb_seed
-        if perturb_seed is None:
-            perturb_seed = int(cli_args.seed) + int(cli_args.attempt_index)
-        sampler = ContactPointPerturbationSampler(
-            build_ranges(cli_args),
-            seed=perturb_seed,
-            fixed_episode_perturbation=not cli_args.dynamic_call_perturbation,
-        )
-        args = build_args(
-            cli_args.task_name,
-            cli_args.task_config,
-            output_save_root=Path(cli_args.attempt_output_root),
-        )
-        if cli_args.source_task_config is not None:
-            args["source_task_config"] = cli_args.source_task_config
-
-        success_args, fail_args = make_seed_output_args(args, cli_args.seed)
-        os.makedirs(success_args["save_path"], exist_ok=True)
-        os.makedirs(fail_args["save_path"], exist_ok=True)
-        plan_save_path = tempfile.mkdtemp(
-            prefix=f"robotwin_contact_perturb_attempt_{cli_args.seed}_{cli_args.attempt_index}_",
-            dir=str(Path(cli_args.attempt_output_root)),
-        )
-        task = class_decorator(cli_args.task_name)
-        meta = {
-            "scene_seed": int(cli_args.seed),
-            "source_mode": "seed",
-            "source_task": cli_args.task_name,
-            "source_task_config": args["source_task_config"],
-            "source_episode": None,
-            "perturbation_index_for_source": int(cli_args.attempt_index),
-            "attempt_index": int(cli_args.attempt_index),
-        }
-        install_contact_point_perturbation_patch(sampler)
-        try:
-            status = collect_one_seed_perturbed_episode(
-                task,
-                success_args,
-                fail_args,
-                0,
-                0,
-                0,
-                plan_save_path,
-                int(cli_args.seed),
-                sampler,
-                meta,
-                overwrite=True,
-                save_success=cli_args.attempt_save_success,
-                save_fail=cli_args.attempt_save_fail,
-                progress=progress,
-            )
-        finally:
-            uninstall_contact_point_perturbation_patch()
-
-        if status in {"success", "success_extra"}:
-            source_save_path = success_args["save_path"]
-        elif status in {"task_error", "task_error_extra"}:
-            source_save_path = fail_args["save_path"]
-        else:
-            source_save_path = None
-        result.update(
-            {
-                "status": status,
-                "attempt_index": int(cli_args.attempt_index),
-                "scene_seed": int(cli_args.seed),
-                "perturb_seed": int(perturb_seed),
-                "source_save_path": source_save_path,
-            }
-        )
-    except BaseException as e:
-        result.update(
-            {
-                "status": "exception",
-                "error": str(e),
-                "traceback": traceback.format_exc(),
-            }
-        )
-    finally:
-        if plan_save_path is not None:
-            shutil.rmtree(plan_save_path, ignore_errors=True)
-        write_attempt_result(cli_args.attempt_result_path, result)
-
-    if result["status"] == "exception":
-        raise SystemExit(1)
-
-
-def run_distributed_worker(cli_args):
-    if cli_args.max_attempts is not None and cli_args.max_attempts <= 0:
-        raise SystemExit("--max-attempts must be positive")
-    if cli_args.task_name is None or cli_args.task_config is None or cli_args.seed is None:
-        raise SystemExit("distributed worker requires --task-name, --task-config, and --seed")
-    if cli_args.seed_threads <= 0:
-        raise SystemExit("--seed-threads must be positive")
-
-    perturb_seed = cli_args.perturb_seed
-    if perturb_seed is None:
-        perturb_seed = cli_args.seed
-    output_root = Path(cli_args.worker_output_root) if cli_args.worker_output_root else None
-    args = build_args(cli_args.task_name, cli_args.task_config, output_save_root=output_root)
-    if cli_args.source_task_config is not None:
-        args["source_task_config"] = cli_args.source_task_config
-
-    perturbation_num_success, perturbation_num_fail = resolve_perturbation_targets(cli_args)
-    progress = OverallCollectionProgress(total_tasks=1)
-    if int(cli_args.seed_threads) > 1:
-        try:
-            with progress.redirect_output():
-                collect_seed_mode_parallel(
-                    args,
-                    cli_args,
-                    scene_seed=cli_args.seed,
-                    perturbation_num_success=perturbation_num_success,
-                    perturbation_num_fail=perturbation_num_fail,
-                    max_attempts=cli_args.max_attempts,
-                    base_perturb_seed=perturb_seed,
-                    seed_threads=cli_args.seed_threads,
-                    start_episode=cli_args.start_episode,
-                    overwrite=cli_args.overwrite,
-                    progress=progress,
-                )
-        finally:
-            progress.close()
-        return
-
-    sampler = ContactPointPerturbationSampler(
-        build_ranges(cli_args),
-        seed=perturb_seed,
-        fixed_episode_perturbation=not cli_args.dynamic_call_perturbation,
-    )
-    install_contact_point_perturbation_patch(sampler)
-    try:
-        with progress.redirect_output():
-            collect_seed_mode(
-                args,
-                sampler,
-                scene_seed=cli_args.seed,
-                perturbation_num_success=perturbation_num_success,
-                perturbation_num_fail=perturbation_num_fail,
-                max_attempts=cli_args.max_attempts,
-                start_episode=cli_args.start_episode,
-                overwrite=cli_args.overwrite,
-                progress=progress,
-            )
-    finally:
-        progress.close()
-        uninstall_contact_point_perturbation_patch()
-
-
 def main(cli_args):
     if cli_args.max_attempts is not None and cli_args.max_attempts <= 0:
         raise SystemExit("--max-attempts must be positive")
@@ -2529,7 +1722,6 @@ if __name__ == "__main__":
     parser.add_argument("--task-config", type=str, default=None)
     parser.add_argument("--source-task-config", type=str, default=None)
     parser.add_argument("--seed", type=int, default=None)
-    parser.add_argument("--seeds", nargs="+", type=int, default=[])
     parser.add_argument("--perturb-seed", type=int, default=None)
     parser.add_argument("--perturbation-num", type=int, default=None)
     parser.add_argument("--perturbation-num-success", type=int, default=None)
@@ -2542,18 +1734,6 @@ if __name__ == "__main__":
     parser.add_argument("--start-episode", type=int, default=None)
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--dynamic-call-perturbation", action="store_true")
-    parser.add_argument("--cuda-devices", type=str, default="0")
-    parser.add_argument("--threads", type=int, default=1)
-    parser.add_argument("--seed-threads", type=int, default=1)
-    parser.add_argument("--log-dir", type=str, default="logs")
-    parser.add_argument("--distributed-worker", action="store_true")
-    parser.add_argument("--distributed-attempt-worker", action="store_true")
-    parser.add_argument("--worker-output-root", type=str, default=None)
-    parser.add_argument("--attempt-index", type=int, default=None)
-    parser.add_argument("--attempt-output-root", type=str, default=None)
-    parser.add_argument("--attempt-result-path", type=str, default=None)
-    parser.add_argument("--attempt-save-success", action="store_true")
-    parser.add_argument("--attempt-save-fail", action="store_true")
     parser.add_argument("--x-range", nargs=2, type=float, default=[0.0, 0.0], metavar=("MIN", "MAX"))
     parser.add_argument("--y-range", nargs=2, type=float, default=[0.0, 0.0], metavar=("MIN", "MAX"))
     parser.add_argument("--z-range", nargs=2, type=float, default=[0.0, 0.0], metavar=("MIN", "MAX"))
@@ -2562,15 +1742,10 @@ if __name__ == "__main__":
     parser.add_argument("--yaw-range", nargs=2, type=float, default=[0.0, 0.0], metavar=("MIN_DEG", "MAX_DEG"))
     args = parser.parse_args()
 
-    if args.distributed_attempt_worker:
-        from test_render import Sapien_TEST
+    from test_render import Sapien_TEST
+    Sapien_TEST()
 
-        Sapien_TEST()
-        run_distributed_attempt_worker(args)
-    elif args.distributed_worker:
-        from test_render import Sapien_TEST
+    import torch.multiprocessing as mp
 
-        Sapien_TEST()
-        run_distributed_worker(args)
-    else:
-        run_distributed_parent(args)
+    mp.set_start_method("spawn", force=True)
+    main(args)

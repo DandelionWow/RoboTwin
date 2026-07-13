@@ -206,3 +206,172 @@ python script/collect_perturbed_data_seed_auto_distribution.py \
 --yaw-range -15 15 \
 --cuda-devices 0,1,2 \
 --threads 6
+
+分布式升级
+
+示例 1：单 seed，seed 内并发 3 个 attempt
+python script/collect_perturbed_data_seed_auto_distribution.py \
+--mode seed \
+--task-name pick_apple_messy \
+--task-config ep2_1_object_pose_auto_test \
+--seeds 0 \
+--perturbation-num-success 3 \
+--perturbation-num-fail 2 \
+--x-range -0.05 0.05 \
+--y-range -0.05 0.05 \
+--z-range 0 0.05 \
+--roll-range -15 15 \
+--pitch-range -15 15 \
+--yaw-range -15 15 \
+--cuda-devices 0,1,2 \
+--threads 1 \
+--seed-threads 3
+
+示例 2：dataset 模式，跨 seed 并发 3 个，每个 seed 内并发 2 个 attempt
+python script/collect_perturbed_data_seed_auto_distribution.py \
+--mode dataset \
+--task-config ep2_1_object_pose_auto_test \
+--tasks pick_apple_messy \
+--sample-start 0 \
+--sample-end 4 \
+--perturbation-num-success 3 \
+--perturbation-num-fail 2 \
+--x-range -0.05 0.05 \
+--y-range -0.05 0.05 \
+--z-range 0 0.05 \
+--roll-range -15 15 \
+--pitch-range -15 15 \
+--yaw-range -15 15 \
+--cuda-devices 0,1,2 \
+--threads 3 \
+--seed-threads 2
+
+
+python script/collect_perturbed_data_seed_auto_distribution.py \
+--mode dataset \
+--task-config ep2_1_object_pose_auto_dual \
+--tasks place_cans_plasticbox \
+--sample-start 0 \
+--sample-end 4 \
+--perturbation-num-success 3 \
+--perturbation-num-fail 2 \
+--max-attempts 200 \
+--x-range -0.02 0.02 \
+--y-range -0.02 0.02 \
+--z-range 0 0.02 \
+--roll-range -15 15 \
+--pitch-range -15 15 \
+--yaw-range -15 15 \
+--cuda-devices 2,3 \
+--threads 2 \
+--seed-threads 5
+
+
+
+python script/collect_perturbed_data_seed_auto_distribution.py \
+--mode dataset \
+--task-config ep2_1_object_pose_auto \
+--tasks open_microwave \
+--sample-start 0 \
+--sample-end 0 \
+--perturbation-num-success 3 \
+--perturbation-num-fail 2 \
+--max-attempts 200 \
+--x-range -0.03 0.03 \
+--y-range -0.05 0.02 \
+--z-range 0.02 0.05 \
+--roll-range -15 -6 \
+--pitch-range 8 15 \
+--yaw-range -15 -6 \
+--cuda-devices 1,2,3 \
+--threads 1 \
+--seed-threads 10
+
+python script/collect_perturbed_data_seed_auto_distribution.py \
+--mode dataset \
+--task-config ep2_1_object_pose_auto \
+--tasks open_microwave \
+--sample-start 0 \
+--sample-end 0 \
+--perturbation-num-success 3 \
+--perturbation-num-fail 2 \
+--max-attempts 200 \
+--x-range -0.04 0.04 \
+--y-range -0.05 0.00 \
+--z-range 0.02 0.05 \
+--roll-range -15 0 \
+--pitch-range 8 15 \
+--yaw-range -15 -6 \
+--cuda-devices 1,2,3 \
+--threads 1 \
+--seed-threads 10
+
+------------------------
+python third_party/robotwin/script/collect_data_seed.py adjust_bottle demo_large_d435_oidn 0 1 2 3 4
+python script/collect_data_seed.py adjust_bottle demo_large_d435_oidn 0 1 2 3 4
+python script/collect_data_seed.py adjust_bottle demo_large_d435_optix 0 1 2 3 4
+
+CUDA_VISIBLE_DEVICES=1 python third_party/robotwin/script/collect_data_replay.py \
+    --task-config demo_large_d435_oidn \
+    --tasks adjust_bottle \
+    --episodes 0-4 \
+    --overwrite
+
+python third_party/robotwin/script/collect_data_replay.py \
+    --task-config demo_d435_oidn \
+    --tasks adjust_bottle \
+    --episodes 0-4 \
+    --overwrite
+
+
+CUDA_VISIBLE_DEVICES=1 python third_party/robotwin/script/collect_data_replay.py \
+    --task-config demo_large_d435_optix \
+    --tasks adjust_bottle \
+    --episodes 0-4 \
+    --overwrite
+
+
+
+
+python third_party/robotwin/script/collect_data_replay.py \
+    --task-config demo_large_d435_oidn \
+    --tasks place_a2b_left place_a2b_right place_object_scale place_object_stand put_object_cabinet \
+    --episodes 0 \
+    --overwrite
+
+
+python script/run_original_trajectory_replay.py \
+    --output-name dataset_original_traj_large_run1 \
+    --tasks adjust_bottle \
+    --episodes 2 \
+    --gpus 0 \
+    --workers-per-gpu 1
+
+
+python third_party/robotwin/data/compare_robotwin_datasets.py \
+    --dir-a /data/wangbowen/PHD_Research/02_Action_Generalization/Action_Hallucination_Verification/robotwin_consistency/third_party/robotwin/data/demo_large_d435_oidn \
+    --dir-b /data/wangbowen/PHD_Research/02_Action_Generalization/Action_Hallucination_Verification/robotwin_consistency/third_party/robotwin/data/demo_large_d435_optix
+
+python third_party/robotwin/data/compare_robotwin_datasets.py \
+    --dir-a /data/wangbowen/PHD_Research/02_Action_Generalization/Action_Hallucination_Verification/robotwin_consistency/third_party/robotwin/data/demo_large_d435_oidn \
+    --dir-b /data/wangbowen/PHD_Research/02_Action_Generalization/Action_Hallucination_Verification/robotwin_consistency/third_party/robotwin/data/demo_large_d435_oidn_1
+
+python third_party/robotwin/data/compare_robotwin_datasets.py \
+    --dir-a /data/wangbowen/PHD_Research/02_Action_Generalization/Action_Hallucination_Verification/robotwin_consistency/third_party/robotwin/data/demo_large_d435_optix \
+    --dir-b /data/wangbowen/PHD_Research/02_Action_Generalization/Action_Hallucination_Verification/robotwin_consistency/third_party/robotwin/data/demo_large_d435_optix_1
+
+python third_party/robotwin/data/compare_robotwin_datasets.py \
+    --dir-a /data/wangbowen/PHD_Research/02_Action_Generalization/Action_Hallucination_Verification/robotwin_consistency/third_party/robotwin/data/demo_large_d435_optix \
+    --dir-b /data/wangbowen/PHD_Research/02_Action_Generalization/Action_Hallucination_Verification/robotwin_consistency/third_party/robotwin/data/demo_large_d435_optix_cu01
+
+python third_party/robotwin/data/compare_robotwin_datasets.py \
+    --dir-a /data/wangbowen/PHD_Research/02_Action_Generalization/Action_Hallucination_Verification/robotwin_consistency/third_party/robotwin/data/demo_large_d435_oidn \
+    --dir-b /data/wangbowen/PHD_Research/02_Action_Generalization/Action_Hallucination_Verification/robotwin_consistency/third_party/robotwin/data/demo_large_d435_oidn_cu01
+
+python third_party/robotwin/data/compare_robotwin_datasets.py \
+    --dir-a /data/wangbowen/PHD_Research/02_Action_Generalization/Action_Hallucination_Verification/robotwin_consistency/database/datasets/robotwin_480_640 \
+    --dir-b /data/wangbowen/PHD_Research/02_Action_Generalization/Action_Hallucination_Verification/robotwin_consistency/third_party/robotwin/data/demo_large_d435_oidn
+
+python third_party/robotwin/data/compare_robotwin_datasets.py \
+    --dir-a /data/wangbowen/PHD_Research/02_Action_Generalization/Action_Hallucination_Verification/robotwin_consistency/third_party/robotwin/data/dataset_original_traj_large_run1_pro6000 \
+    --dir-b /data/wangbowen/PHD_Research/02_Action_Generalization/Action_Hallucination_Verification/robotwin_consistency/third_party/robotwin/data/dataset_original_traj_large_run1_5090
